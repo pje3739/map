@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>나만의 지도 앱</title>
+  <style>
+    /* 지도 크기 및 가운데 정렬 */
+    #map {
+      width: 50%;
+      height: 500px;
+      margin: 0 auto;
+    }
+
+    /* 클릭 위치를 표시하는 작은 동그라미 스타일 */
+    .dot {
+      overflow:hidden;
+      float:left;
+      width:12px;
+      height:12px;
+      background: url('https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/mini_circle.png');
+    }    
+
+    /* 거리 정보 표시 박스 스타일 */
+    .dotOverlay {
+      position:relative;
+      bottom:10px;
+      border-radius:6px;
+      border: 1px solid #ccc;
+      border-bottom:2px solid #ddd;
+      float:left;
+      font-size:12px;
+      padding:5px;
+      background:#fff;
+    }
+
+    .dotOverlay:nth-of-type(n) {
+      border:0;
+      box-shadow:0px 1px 2px #888;
+    }    
+
+    /* 거리 숫자 강조 */
+    .number {
+      font-weight:bold;
+      color:#ee6152;
+    }
+
+    /* 동그라미 아래쪽 작은 삼각형 이미지 */
+    .dotOverlay:after {
+      content:'';
+      position:absolute;
+      margin-left:-6px;
+      left:50%;
+      bottom:-8px;
+      width:11px;
+      height:8px;
+      background:url('https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/vertex_white_small.png');
+    }
+
+    /* 거리 정보 리스트 스타일 */
+    .distanceInfo {
+      position:relative;
+      top:5px;
+      left:5px;
+      list-style:none;
+      margin:0;
+    }
+    .distanceInfo .label {
+      display:inline-block;
+      width:50px;
+    }
+    .distanceInfo:after {
+      content:none;
+    }
+
+    /* 거리 리스트 박스 스타일 */
+    #distanceList {
+      width: 50%;
+      margin: 20px auto;
+      font-family: Arial, sans-serif;
+      background: #f8f8f8;
+      border: 1px solid #ddd;
+      padding: 10px;
+      border-radius: 6px;
+    }
+    #distanceList h3 {
+      margin-top: 0;
+    }
+    #distanceList ul {
+      padding-left: 20px;
+      margin: 0;
+    }
+    #distanceList li {
+      margin-bottom: 8px;
+    }
+  </style>
+</head>
+
+<body>
+  <!-- Kakao 지도 API 불러오기, services와 drawing 라이브러리 포함 -->
+  <script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=63c10cc7b68bbcd565495030f1e633c2&libraries=services,drawing"></script>
+  
+  <h1 style="text-align: center; margin-top: 30px;">나만의 지도 앱</h1>
+  <div id="map"></div>
+
+  <!-- 거리 리스트를 보여줄 영역 -->
+  <div id="distanceList">
+    <h3>거리 리스트</h3>
+    <p>아직 거리가 없습니다.</p>
+  </div>
+
+  <script>
+    // 지도 생성에 필요한 HTML 요소와 옵션 설정
+    var mapContainer = document.getElementById('map'),
+        mapOption = { 
+            center: new kakao.maps.LatLng(35.931439693, 128.554521326), // 지도 중심 좌표
+            level: 3 // 지도 확대 레벨
+        };
+
+    // 지도 생성
+    var map = new kakao.maps.Map(mapContainer, mapOption);
+
+    // 그리기 상태를 나타내는 변수, 초기값은 false (그리기 안 하는 상태)
+    var drawingFlag = false; 
+
+    // 현재 그리기 중인 선과 보조 선 변수
+    var moveLine; 
+    var clickLine; 
+
+    // 거리 표시 커스텀 오버레이 변수
+    var distanceOverlay; 
+
+    // 클릭 위치 마커(원형)와 거리 오버레이 객체들을 저장하는 배열
+    var dots = []; 
+
+    // 각 구간별 거리 및 시간 정보를 저장할 배열
+    var distanceList = []; 
+
+
+    /**
+     * 지도 클릭 이벤트 핸들러
+     * - 선 그리기를 시작하거나, 계속 그리거나 함
+     */
+    kakao.maps.event.addListener(map, 'click', function(mouseEvent) {
+        var clickPosition = mouseEvent.latLng; // 클릭한 좌표
+
+        if (!drawingFlag) {
+            // 그리기 시작
+            drawingFlag = true;
+
+            // 기존 선, 거리 표시 삭제
+            deleteClickLine();
+            deleteDistnce();
+            deleteCircleDot();
+
+            // 거리 리스트 초기화 및 UI 업데이트
+            distanceList = [];
+            updateDistanceList();
+
+            // 클릭 위치로 선 생성
+            clickLine = new kakao.maps.Polyline({
+                map: map,
+                path: [clickPosition], // 첫 점만 있음
+                strokeWeight: 3,
+                strokeColor: '#db4040',
+                strokeOpacity: 1,
+                strokeStyle: 'solid'
+            });
+
+            // 마우스 움직임에 따라 선 위치 보여줄 보조선 생성
+            moveLine = new kakao.maps.Polyline({
+                strokeWeight: 3,
+                strokeColor: '#db4040',
+                strokeOpacity: 0.5,
+                strokeStyle: 'solid'
+            });
+
+            // 클릭 위치에 동그라미 표시 (거리 0)
+            displayCircleDot(clickPosition, 0);
+
+        } else {
+            // 선 그리고 있는 중, 클릭 좌표 추가
+            var path = clickLine.getPath();
+            path.push(clickPosition);
+            clickLine.setPath(path);
+
+            // 총 거리 계산
+            var distance = Math.round(clickLine.getLength());
+
+            // 클릭 위치에 동그라미 및 거리 표시
+            displayCircleDot(clickPosition, distance);
+
+            // 거리, 도보/자전거 시간 계산하여 배열에 저장
+            distanceList.push(calcDistanceInfo(distance));
+
+            // 거리 리스트 UI 업데이트
+            updateDistanceList();
+        }
+    });
+
+
+    /**
+     * 마우스 이동 이벤트 핸들러
+     * - 선 그리고 있는 중 보조선 위치 업데이트
+     * - 총 거리 오버레이 표시
+     */
+    kakao.maps.event.addListener(map, 'mousemove', function (mouseEvent) {
+        if (drawingFlag){
+            var mousePosition = mouseEvent.latLng; 
+            var path = clickLine.getPath();
+            var movepath = [path[path.length-1], mousePosition];
+            moveLine.setPath(movepath);    
+            moveLine.setMap(map);
+
+            // 총 거리 = 클릭으로 그린 선 + 보조선 길이
+            var distance = Math.round(clickLine.getLength() + moveLine.getLength());
+
+            var content = '<div class="dotOverlay distanceInfo">총거리 <span class="number">' + distance + '</span>m</div>';
+
+            // 거리 표시 오버레이 표시
+            showDistance(content, mousePosition);   
+        }             
+    }); 
+
+
+    /**
+     * 마우스 오른쪽 클릭 이벤트 핸들러
+     * - 선 그리기 종료
+     * - 총 거리 및 예상 시간 표시
+     */
+    kakao.maps.event.addListener(map, 'rightclick', function (mouseEvent) {
+        if (drawingFlag) {
+            // 보조선 제거
+            moveLine.setMap(null);
+            moveLine = null;  
+
+            var path = clickLine.getPath();
+
+            if (path.length > 1) {
+                // 마지막 거리 오버레이 제거
+                if (dots[dots.length-1].distance) {
+                    dots[dots.length-1].distance.setMap(null);
+                    dots[dots.length-1].distance = null;    
+                }
+
+                // 총 거리 계산 및 시간 정보 가져오기
+                var distance = Math.round(clickLine.getLength());
+                var content = getTimeHTML(distance);
+
+                // 총 거리 및 시간 표시
+                showDistance(content, path[path.length-1]);
+
+            } else {
+                // 선이 1개 이하이면 모두 삭제
+                deleteClickLine();
+                deleteCircleDot(); 
+                deleteDistnce();
+
+                // 거리 리스트 초기화 및 UI 업데이트
+                distanceList = [];
+                updateDistanceList();
+            }
+            drawingFlag = false;          
+        }  
+    });  
+
+
+    /**
+     * 기존에 그려진 선 삭제 함수
+     */
+    function deleteClickLine() {
+        if (clickLine) {
+            clickLine.setMap(null);    
+            clickLine = null;        
+        }
+    }
+
+
+    /**
+     * 거리 표시 커스텀 오버레이 삭제 함수
+     */
+    function deleteDistnce () {
+        if (distanceOverlay) {
+            distanceOverlay.setMap(null);
+            distanceOverlay = null;
+        }
+    }
+
+
+    /**
+     * 클릭 위치 동그라미와 거리 오버레이 모두 삭제하는 함수
+     */
+    function deleteCircleDot() {
+        for (var i = 0; i < dots.length; i++ ){
+            if (dots[i].circle) { 
+                dots[i].circle.setMap(null);
+            }
+            if (dots[i].distance) {
+                dots[i].distance.setMap(null);
+            }
+        }
+        dots = [];
+    }
+
+
+    /**
+     * 거리 표시용 커스텀 오버레이 생성 및 위치/내용 업데이트 함수
+     */
+    function showDistance(content, position) {
+        if (distanceOverlay) {
+            distanceOverlay.setPosition(position);
+            distanceOverlay.setContent(content);
+        } else {
+            distanceOverlay = new kakao.maps.CustomOverlay({
+                map: map,
+                content: content,
+                position: position,
+                xAnchor: 0,
+                yAnchor: 0,
+                zIndex: 3  
+            });      
+        }
+    }
+
+
+    /**
+     * 클릭 위치에 빨간 동그라미와 거리 표시 오버레이를 생성해 지도에 표시하는 함수
+     * @param {kakao.maps.LatLng} position 클릭 위치 좌표
+     * @param {number} distance 클릭 지점까지의 누적 거리(m)
+     */
+    function displayCircleDot(position, distance) {
+        // 빨간 동그라미 커스텀 오버레이 생성
+        var circleOverlay = new kakao.maps.CustomOverlay({
+            content: '<span class="dot"></span>',
+            position: position,
+            zIndex: 1
+        });
+        circleOverlay.setMap(map);
+
+        // 거리가 0보다 크면 거리 표시 오버레이 생성
+        if (distance > 0) {
+            var distanceOverlay = new kakao.maps.CustomOverlay({
+                content: '<div class="dotOverlay">거리 <span class="number">' + distance + '</span>m</div>',
+                position: position,
+                yAnchor: 1,
+                zIndex: 2
+            });
+            distanceOverlay.setMap(map);
+        }
+        dots.push({circle:circleOverlay, distance: distanceOverlay});
+    }
+
+
+    /**
+     * 거리(m)를 받아 도보 시간과 자전거 시간(시, 분 단위) 계산 후 객체로 반환
+     * @param {number} distance - 거리(m)
+     * @returns {object} - 계산된 거리 및 시간 정보 객체
+     */
+    function calcDistanceInfo(distance) {
+      // 도보 평균 시속 4km/h = 67m/min
+      var walkMin = distance / 67;
+      var walkHourPart = Math.floor(walkMin / 60);
+      var walkMinPart = Math.floor(walkMin % 60);
+
+      // 자전거 평균 시속 13.6km/h = 227m/min
+      var bikeMin = distance / 227;
+      var bikeHourPart = Math.floor(bikeMin / 60);
+      var bikeMinPart = Math.floor(bikeMin % 60);
+
+      return {
+        distance: distance,
+        walkHour: walkHourPart,
+        walkMin: walkMinPart,
+        bikeHour: bikeHourPart,
+        bikeMin: bikeMinPart
+      };
+    }
+
+
+    /**
+     * 거리 리스트 UI를 업데이트하는 함수
+     * - 거리, 도보시간, 자전거 시간을 리스트 형태로 보여줌
+     */
+    function updateDistanceList() {
+        var distanceDiv = document.getElementById('distanceList');
+
+        if (distanceList.length === 0) {
+            // 거리가 없으면 기본 메시지 출력
+            distanceDiv.innerHTML = '<h3>거리 리스트</h3><p>아직 거리가 없습니다.</p>';
+            return;
+        }
+
+        // 리스트 아이템 생성
+        var html = '<h3>거리 리스트</h3><ul>';
+        for (var i = 0; i < distanceList.length; i++) {
+            var d = distanceList[i];
+            html += '<li><strong>' + (i + 1) + '번째 지점까지</strong> - 거리: ' + d.distance + 'm, 도보: ' 
+                    + (d.walkHour > 0 ? d.walkHour + '시간 ' : '') + d.walkMin + '분, 자전거: ' 
+                    + (d.bikeHour > 0 ? d.bikeHour + '시간 ' : '') + d.bikeMin + '분</li>';
+        }
+        html += '</ul>';
+        distanceDiv.innerHTML = html;
+    }
+
+
+    /**
+     * 총 거리 기준으로 도보 시간과 자전거 시간을 HTML 포맷으로 만들어 반환
+     * @param {number} distance - 총 거리(m)
+     * @returns {string} - HTML 문자열
+     */
+    function getTimeHTML(distance) {
+        var walkkTime = distance / 67 | 0;
+        var walkHour = '', walkMin = '';
+        if (walkkTime > 60) {
+            walkHour = '<span class="number">' + Math.floor(walkkTime / 60) + '</span>시간 ';
+        }
+        walkMin = '<span class="number">' + walkkTime % 60 + '</span>분';
+
+        var bycicleTime = distance / 227 | 0;
+        var bycicleHour = '', bycicleMin = '';
+        if (bycicleTime > 60) {
+            bycicleHour = '<span class="number">' + Math.floor(bycicleTime / 60) + '</span>시간 ';
+        }
+        bycicleMin = '<span class="number">' + bycicleTime % 60 + '</span>분';
+
+        var content = '<ul class="dotOverlay distanceInfo">';
+        content += '    <li><span class="label">총거리</span><span class="number">' + distance + '</span>m</li>';
+        content += '    <li><span class="label">도보</span>' + walkHour + walkMin + '</li>';
+        content += '    <li><span class="label">자전거</span>' + bycicleHour + bycicleMin + '</li>';
+        content += '</ul>';
+
+        return content;
+    }
+  </script>
+</body>
+</html>
